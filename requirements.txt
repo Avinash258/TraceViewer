@@ -1,0 +1,1 @@
+# Stdlib only — install Python 3.10+

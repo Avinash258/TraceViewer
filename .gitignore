@@ -1,0 +1,13 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+uv.lock
+
+# Outputs
+*.postman_collection.json
+dist/
+build/
