@@ -6,6 +6,10 @@ Then from the project root run:
 
     python extract.py
 
-Generated Postman JSON files are written to:
+Generated files are written to:
 
     ..\output\
+
+    *.api_sequence.md     API breakup in call order, from token fetch
+    *.api_sequence.json
+    *.postman_collection.json

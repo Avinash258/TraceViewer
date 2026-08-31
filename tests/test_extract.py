@@ -8,6 +8,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from apiextracter.flow import analyze_flow
 from apiextracter.parser import parse_trace
 from apiextracter.postman import POSTMAN_SCHEMA, build_collection
 
@@ -131,6 +132,71 @@ def _write_trace_zip(path: Path) -> Path:
     return path
 
 
+def _token_network_jsonl() -> str:
+    events = [
+        {
+            "type": "resource-snapshot",
+            "snapshot": {
+                "time": 10,
+                "request": {
+                    "method": "GET",
+                    "url": "https://api.example.com/health",
+                    "headers": [],
+                },
+                "response": {"status": 200, "content": {"mimeType": "application/json", "text": '{"ok":true}'}},
+            },
+        },
+        {
+            "type": "resource-snapshot",
+            "snapshot": {
+                "time": 40,
+                "_apiRequest": True,
+                "request": {
+                    "method": "POST",
+                    "url": "https://auth.example.com/oauth/token",
+                    "headers": [{"name": "Content-Type", "value": "application/x-www-form-urlencoded"}],
+                    "postData": {
+                        "mimeType": "application/x-www-form-urlencoded",
+                        "text": "grant_type=password&username=ada&password=s3cret&client_id=web",
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "statusText": "OK",
+                    "content": {
+                        "mimeType": "application/json",
+                        "text": '{"access_token":"tok-abc-999","token_type":"Bearer","expires_in":3600}',
+                    },
+                },
+            },
+        },
+        {
+            "type": "resource-snapshot",
+            "snapshot": {
+                "time": 25,
+                "request": {
+                    "method": "GET",
+                    "url": "https://api.example.com/v1/profile",
+                    "headers": [{"name": "Authorization", "value": "Bearer tok-abc-999"}],
+                    "queryString": [],
+                },
+                "response": {
+                    "status": 200,
+                    "content": {"mimeType": "application/json", "text": '{"name":"Ada"}'},
+                },
+            },
+        },
+    ]
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def _write_token_trace_zip(path: Path) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("trace.trace", json.dumps({"type": "context-options", "title": "Login flow"}) + "\n")
+        zf.writestr("trace.network", _token_network_jsonl())
+    return path
+
+
 class ExtractTests(unittest.TestCase):
     def test_zip_to_postman_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,6 +258,38 @@ class ExtractTests(unittest.TestCase):
             data = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(data["info"]["name"], "CLI flow")
             self.assertTrue(data["item"])
+            seq = Path(tmp) / "flow.api_sequence.json"
+            self.assertTrue(seq.is_file())
+
+    def test_sequence_starts_at_access_token_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "token.zip"
+            _write_token_trace_zip(zip_path)
+            result = parse_trace(zip_path)
+            self.assertEqual(len(result.requests), 3)
+
+            flow = analyze_flow(result.requests, from_token=True)
+            self.assertTrue(flow.token_found)
+            self.assertEqual(flow.skipped_before_token, 1)
+            self.assertEqual(flow.access_token, "tok-abc-999")
+            self.assertEqual([s.method + " " + s.path for s in flow.steps], ["POST /oauth/token", "GET /v1/profile"])
+            self.assertEqual(flow.steps[0].role, "access_token_fetch")
+            self.assertEqual(flow.steps[0].values_used["body"]["username"], "ada")
+            self.assertEqual(flow.steps[0].values_used["body"]["password"], "s3cret")
+            self.assertEqual(flow.steps[1].uses_token_from_step, 1)
+            self.assertIn("{{accessToken}}", flow.steps[1].values_used["headers"]["Authorization"])
+
+            collection = build_collection(result, flow=flow, group_by="sequence")
+            self.assertEqual(len(collection["item"]), 2)
+            self.assertIn("access token fetch", collection["item"][0]["name"])
+            auth = next(h for h in collection["item"][1]["request"]["header"] if h["key"].lower() == "authorization")
+            self.assertEqual(auth["value"], "Bearer {{accessToken}}")
+            self.assertTrue(any(v["key"] == "accessToken" and v["value"] == "tok-abc-999" for v in collection["variable"]))
+            self.assertEqual(collection["item"][0]["event"][0]["listen"], "test")
+
+            full = analyze_flow(result.requests, from_token=False)
+            self.assertEqual(len(full.steps), 3)
+            self.assertEqual(full.steps[0].path, "/health")
 
 
 if __name__ == "__main__":

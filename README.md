@@ -1,6 +1,9 @@
 # Playwright Trace to Postman Collection
 
-Python app that reads a Playwright `trace.zip` and writes a Postman Collection v2.1 JSON file you can import.
+Python app that reads a Playwright `trace.zip` and writes:
+
+1. A **sequenced API breakup** starting from the **access-token fetch**, with the values used
+2. A **Postman Collection v2.1 JSON** you can import and replay in that same order
 
 Repository: [github.com/Avinash258/TraceViewer](https://github.com/Avinash258/TraceViewer)
 
@@ -15,117 +18,75 @@ python extract.py
 | Role | Path | What to put there |
 |---|---|---|
 | **Input** | `Trace\` | Playwright `trace.zip` files |
-| **Output** | `output\` | Generated `*.postman_collection.json` (created automatically) |
+| **Output** | `output\` | Sequence + Postman JSON (created automatically) |
 | App | `extract.py` | Run this from the project root |
 
 ```
 apiextracter\
-  extract.py                 <- run this
+  extract.py
   Trace\
-    my-flow.zip              <- INPUT: drop Playwright traces here
+    my-flow.zip                         <- INPUT
   output\
-    my-flow.postman_collection.json   <- OUTPUT: import this in Postman
+    my-flow.api_sequence.md             <- readable breakup (start at token fetch)
+    my-flow.api_sequence.json           <- same breakup as JSON
+    my-flow.postman_collection.json     <- import in Postman
 ```
 
 ## How to execute
 
-1. Copy your Playwright trace into the input folder:
-
-   `c:\Project\apiextracter\Trace\`
-
-   Example already in this project:
-
-   `Trace\4e6fd384-d651-4ca4-ae15-ae87b8dcfd0c-attachment.zip`
-
-2. Open PowerShell in the project root:
-
-   ```powershell
-   cd c:\Project\apiextracter
-   python extract.py
-   ```
-
-   That processes **every** `.zip` in `Trace\`.
-
-3. Open the JSON from the output folder:
-
-   `c:\Project\apiextracter\output\<trace-name>.postman_collection.json`
-
-4. In Postman: **Import → File** and select that JSON.
-
-### One specific trace
-
 ```powershell
 cd c:\Project\apiextracter
-python extract.py Trace\4e6fd384-d651-4ca4-ae15-ae87b8dcfd0c-attachment.zip
+python extract.py
 ```
 
-Output for that file:
+That processes every `.zip` in `Trace\`.
 
-`output\4e6fd384-d651-4ca4-ae15-ae87b8dcfd0c-attachment.postman_collection.json`
-
-### Custom output path
+One file:
 
 ```powershell
-python extract.py Trace\my-trace.zip -o output\checkout.postman_collection.json --name "Checkout flow"
+python extract.py Trace\my-trace.zip
 ```
 
-### If `python` is not found
+## What you get
 
-Use the Python launcher or a full path, for example:
+The sequence **starts at the access-token fetch** (oauth/token, login, etc.). Calls before that are skipped unless you pass `--full-flow`.
 
-```powershell
-py -3 extract.py
-```
+For each API in order it records:
 
-or:
+- Method, URL, status
+- **Values used**: query, body fields (username, password, grant_type, …), headers
+- Token written from the fetch response (`access_token` / `accessToken`)
+- Later APIs that send that token as `Authorization: Bearer {{accessToken}}`
 
-```powershell
-python3 extract.py
-```
+The Postman collection:
 
-Python 3.10+ is required. No pip packages are needed.
+- Keeps that same order
+- Saves `{{accessToken}}` from the token-fetch response (Tests script)
+- Uses `Bearer {{accessToken}}` on the following requests
 
-## What the JSON contains
-
-By default the collection is **API traffic only**, in capture order:
-
-- Method, URL, query, headers, body
-- Example responses from the trace
-- Auth tokens as collection variables when present
-
-Filtered out unless you opt in: JS/CSS/images, HTML page loads, CORS `OPTIONS`.
+Import in Postman: **Import → File** and select `output\<name>.postman_collection.json`. Run the collection **in order**.
 
 ## Options
 
 | Flag | Meaning |
 |---|---|
-| `-o`, `--output` | Output JSON path (one input only) |
+| `-o`, `--output` | Postman JSON path (one input only) |
 | `--name` | Collection name in Postman |
-| `--group-by host\|path\|none` | Folder grouping (default: `host`) |
+| `--full-flow` | Keep APIs that ran before the token fetch |
+| `--no-sequence` | Do not write `.api_sequence.md` / `.json` |
+| `--group-by sequence\|host\|path\|none` | Folder grouping (default: `sequence`) |
 | `--include-static` | Keep JS/CSS/images |
 | `--include-preflight` | Keep OPTIONS requests |
-| `--include-browser-headers` | Keep `sec-ch-*` / `sec-fetch-*` headers |
-| `--no-responses` | Skip example responses |
 | `--dedupe` | Drop identical method + URL + body repeats |
-| `--no-variables` | Keep raw auth header values |
 
 ```powershell
 python extract.py --help
+python extract.py Trace\my-trace.zip --full-flow
 ```
 
-## Input types
-
-The input can be:
-
-- a Playwright `trace.zip` (usual case)
-- an unzipped trace folder
-- a standalone `.network` or `.har` file
-
-## How Playwright traces are read
-
-A `trace.zip` is a zip of JSONL files. Network activity is in `*.network` (HAR-style `resource-snapshot` events). Large bodies live under `resources/` and are referenced by `_sha1` / `_file`. This app reads the zip in memory and rebuilds those bodies into Postman requests.
+Python 3.10+ is required. No pip packages are needed.
 
 ## Notes
 
-- Tokens and cookies from the recording expire. Update collection variables before replaying.
+- Tokens expire. Re-run the token request in Postman so `{{accessToken}}` is refreshed.
 - Replaying write APIs can change data. Prefer a test environment.

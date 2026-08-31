@@ -9,5 +9,7 @@ uv.lock
 
 # Outputs
 *.postman_collection.json
+*.api_sequence.json
+*.api_sequence.md
 dist/
 build/

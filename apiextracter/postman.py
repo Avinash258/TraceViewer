@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import parse_qsl, unquote, urlparse
 
 from apiextracter.filters import should_keep_header
+from apiextracter.flow import POSTMAN_SAVE_TOKEN_SCRIPT, FlowAnalysis, SequenceStep
 from apiextracter.parser import FormParam, Header, NetworkRequest, ParseResult
 
 POSTMAN_SCHEMA = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -26,15 +27,24 @@ def build_collection(
     include_browser_headers: bool = False,
     dedupe: bool = False,
     extract_variables: bool = True,
+    flow: FlowAnalysis | None = None,
 ) -> dict[str, Any]:
-    requests = result.requests
+    requests = list(flow.requests if flow else result.requests)
     if dedupe:
         requests = _dedupe(requests)
+
+    step_by_id = {}
+    if flow:
+        for step, req in zip(flow.steps, flow.requests):
+            step_by_id[id(req)] = step
 
     variables: list[dict[str, str]] = []
     token_vars: dict[str, str] = {}
     if extract_variables:
-        token_vars, variables = _auth_variables(requests)
+        if flow and flow.access_token:
+            token_vars, variables = _flow_token_variables(flow)
+        else:
+            token_vars, variables = _auth_variables(requests)
 
     folders: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for index, req in enumerate(requests, start=1):
@@ -44,11 +54,12 @@ def build_collection(
             include_responses=include_responses,
             include_browser_headers=include_browser_headers,
             token_vars=token_vars,
+            step=step_by_id.get(id(req)),
         )
         key = _folder_key(req, group_by)
         folders[key].append(item)
 
-    if group_by == "none" or (len(folders) == 1 and group_by == "host"):
+    if group_by in {"none", "sequence"} or (len(folders) == 1 and group_by == "host"):
         items = [item for group in folders.values() for item in group]
     else:
         items = [
@@ -60,13 +71,16 @@ def build_collection(
         ]
 
     collection_name = name or result.title or "Playwright API Collection"
+    start = "access token fetch" if flow and flow.token_found else "first captured API"
     description = (
-        f"API requests captured from Playwright trace `{result.title or 'trace'}`.\n\n"
+        f"API sequence captured from Playwright trace `{result.title or 'trace'}`.\n\n"
+        f"- Starts from: {start}\n"
         f"- API requests: {len(requests)}\n"
         f"- Network events seen: {result.total_seen}\n"
         f"- Filtered out (static/preflight): {result.filtered_out}\n"
         f"- Sources: {', '.join(result.sources) or 'n/a'}\n\n"
-        "Import this JSON in Postman via **Import → File**."
+        "Import this JSON in Postman via **Import → File**. "
+        "Run the collection in order so the token fetch can populate `{{accessToken}}`."
     )
 
     collection: dict[str, Any] = {
@@ -100,7 +114,7 @@ def _folder_key(req: NetworkRequest, group_by: str) -> str:
     if group_by == "path":
         first = next((part for part in parsed.path.split("/") if part), "")
         return f"{parsed.netloc} / {first}" if first else parsed.netloc or "unknown"
-    if group_by == "none":
+    if group_by in {"none", "sequence"}:
         return "requests"
     return parsed.netloc or "unknown"
 
@@ -112,16 +126,32 @@ def _request_item(
     include_responses: bool,
     include_browser_headers: bool,
     token_vars: dict[str, str],
+    step: SequenceStep | None = None,
 ) -> dict[str, Any]:
     parsed = urlparse(req.url)
     path = parsed.path or "/"
-    name = f"{index:03d} {req.method} {path}"
-    request_obj = _postman_request(req, include_browser_headers, token_vars)
+    role_note = ""
+    if step and step.role == "access_token_fetch":
+        role_note = " [access token fetch]"
+    elif step and step.uses_token_from_step:
+        role_note = f" [uses token from step {step.uses_token_from_step}]"
+    name = f"{index:03d} {req.method} {path}{role_note}"
+    request_obj = _postman_request(req, include_browser_headers, token_vars, step)
     item: dict[str, Any] = {
         "name": name,
         "request": request_obj,
         "response": [],
     }
+    if step and step.role == "access_token_fetch":
+        item["event"] = [
+            {
+                "listen": "test",
+                "script": {
+                    "type": "text/javascript",
+                    "exec": POSTMAN_SAVE_TOKEN_SCRIPT.splitlines(),
+                },
+            }
+        ]
     if include_responses and req.status:
         item["response"] = [_example_response(req, name, request_obj, include_browser_headers)]
     return item
@@ -131,6 +161,7 @@ def _postman_request(
     req: NetworkRequest,
     include_browser_headers: bool,
     token_vars: dict[str, str],
+    step: SequenceStep | None = None,
 ) -> dict[str, Any]:
     headers = []
     for header in req.headers:
@@ -143,7 +174,7 @@ def _postman_request(
         "method": req.method,
         "header": headers,
         "url": _postman_url(req),
-        "description": _request_description(req),
+        "description": _request_description(req, step),
     }
     body = _postman_body(req)
     if body:
@@ -252,8 +283,12 @@ def _example_response(
     }
 
 
-def _request_description(req: NetworkRequest) -> str:
+def _request_description(req: NetworkRequest, step: SequenceStep | None = None) -> str:
     bits = [f"Captured from `{req.source}`."]
+    if step and step.role == "access_token_fetch":
+        bits.append("This is the access-token fetch. The test script writes `{{accessToken}}` from the response.")
+    if step and step.uses_token_from_step:
+        bits.append(f"Uses the access token written from step {step.uses_token_from_step}.")
     if req.status:
         bits.append(f"Trace response: `{req.status} {req.status_text or _status_text(req.status)}`.")
     if req.time_ms:
@@ -261,6 +296,30 @@ def _request_description(req: NetworkRequest) -> str:
     if req.started:
         bits.append(f"Started: {req.started}.")
     return " ".join(bits)
+
+
+def _flow_token_variables(flow: FlowAnalysis) -> tuple[dict[str, str], list[dict[str, str]]]:
+    token = flow.access_token or ""
+    token_type = flow.token_type or "Bearer"
+    token_map: dict[str, str] = {}
+    for req in flow.requests:
+        for header in req.headers:
+            if header.name.lower() == "authorization" and token and token in header.value:
+                if header.value.lower().startswith("bearer "):
+                    token_map[f"{header.name.lower()}:{header.value}"] = "Bearer {{accessToken}}"
+                else:
+                    token_map[f"{header.name.lower()}:{header.value}"] = "{{accessToken}}"
+    variables = [
+        {"key": "accessToken", "value": token},
+        {"key": "tokenType", "value": token_type},
+    ]
+    extra_map, extra_vars = _auth_variables(flow.requests)
+    for key, value in extra_map.items():
+        token_map.setdefault(key, value)
+    for var in extra_vars:
+        if var["key"] not in {"accessToken", "bearerToken", "tokenType"}:
+            variables.append(var)
+    return token_map, variables
 
 
 def _auth_variables(requests: list[NetworkRequest]) -> tuple[dict[str, str], list[dict[str, str]]]:
