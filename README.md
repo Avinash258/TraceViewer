@@ -1,17 +1,17 @@
-# TraceViewer — Playwright Trace → Postman
+# TraceViewer â€” Playwright Trace â†’ Postman
 
 Turns a Playwright `trace.zip` into a **sequenced API breakdown** and an importable **Postman Collection v2.1**.
 
-> [Portfolio](https://avinash258.github.io/Protfolio/) · related: [AI Accessibility Auditor](https://github.com/Avinash258/AI-accessibilty-Auditor)
+> [Portfolio](https://avinash258.github.io/Protfolio/) Â· related: [AI Accessibility Auditor](https://github.com/Avinash258/AI-accessibilty-Auditor)
 
 ## Overview
 
-When UI tests fail or you need to replay the API traffic behind a journey, this Python tool reads a Playwright trace archive and reconstructs the network story — starting from access-token fetch where present — then exports a Postman collection you can run independently of the browser.
+When UI tests fail or you need to replay the API traffic behind a journey, this Python tool reads a Playwright trace archive and reconstructs the network story â€” starting from access-token fetch where present â€” then exports a Postman collection you can run independently of the browser.
 
 ## Outputs
 
-1. **Sequenced API breakup** — ordered requests with values used at runtime  
-2. **Postman Collection v2.1 JSON** — import and replay in the same order  
+1. **Sequenced API breakup** â€” ordered requests with values used at runtime  
+2. **Postman Collection v2.1 JSON** â€” import and replay in the same order  
 
 ## Stack
 
@@ -34,5 +34,5 @@ Generated artefacts land under `output/`. See `apiextracter/` and `tests/` for l
 
 ## Author
 
-**Pushanshu Avinash Sharma** — QA Automation Architect / Lead SDET  
-[GitHub](https://github.com/Avinash258) · [LinkedIn](https://www.linkedin.com/in/p-avinash-sharma-8b0203b9/) · [Portfolio](https://avinash258.github.io/Protfolio/)
+**Avinash Sharma** â€” QA Automation Architect / Lead SDET  
+[GitHub](https://github.com/Avinash258) Â· [LinkedIn](https://www.linkedin.com/in/p-avinash-sharma-8b0203b9/) Â· [Portfolio](https://avinash258.github.io/Protfolio/)
